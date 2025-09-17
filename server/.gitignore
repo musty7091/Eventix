@@ -1,0 +1,10 @@
+# Bağımlılıklar
+/node_modules
+
+# Ortam değişkenleri dosyası
+.env
+
+# Log dosyaları
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
