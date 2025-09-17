@@ -111,21 +111,32 @@ app.get('/api/events', async (req, res) => {
 app.get('/api/events/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const eventQuery = `SELECT events.*, users.email as organizer_email FROM events JOIN users ON events.organizer_id = users.id WHERE events.id = $1;`;
+        const eventQuery = `SELECT events.*, users.email as organizer_email, users.commission_rate FROM events JOIN users ON events.organizer_id = users.id WHERE events.id = $1;`;
         const eventResult = await db.query(eventQuery, [id]);
         if (eventResult.rows.length === 0) return res.status(404).json({ message: 'Etkinlik bulunamadı.' });
         const event = eventResult.rows[0];
+        const commission_rate = parseFloat(event.commission_rate);
         const ticketTypesQuery = "SELECT * FROM ticket_types WHERE event_id = $1 ORDER BY price ASC;";
         const ticketTypesResult = await db.query(ticketTypesQuery, [id]);
-        const ticket_types = ticketTypesResult.rows;
-        res.status(200).json({ ...event, ticket_types });
+        
+        const ticket_types_with_final_price = ticketTypesResult.rows.map(ticket => {
+            const net_price = parseFloat(ticket.price);
+            const service_fee = net_price * commission_rate;
+            const final_price = net_price + service_fee;
+            return {
+                ...ticket,
+                service_fee: service_fee.toFixed(2),
+                final_price: final_price.toFixed(2)
+            };
+        });
+        
+        res.status(200).json({ ...event, ticket_types: ticket_types_with_final_price });
     } catch (error) {
         console.error('Etkinlik detayı alınırken hata:', error);
         res.status(500).json({ message: 'Sunucuda bir hata oluştu.' });
     }
 });
 
-// BİLET OLUŞTURMA (KOMİSYON ÜZERİNE EKLENİR MODELİ)
 app.post('/api/tickets', [verifyToken, isEndUser], async (req, res) => {
     const pool = db.getPool();
     const client = await pool.connect();
@@ -145,16 +156,10 @@ app.post('/api/tickets', [verifyToken, isEndUser], async (req, res) => {
         const ticketValues = [qr_code, user_id, event_id, ticket_type_id];
         const newTicket = await client.query(ticketInsertQuery, ticketValues);
         const ticket_id = newTicket.rows[0].id;
-
-        // YENİ HESAPLAMA MANTIĞI: Komisyon üzerine eklenir
-        const net_amount = parseFloat(price); // Organizatörün fiyatı, onun net kazancıdır.
-        const commission_amount = net_amount * commission_rate; // Komisyon bu net tutar üzerinden hesaplanır.
-        const gross_amount = net_amount + commission_amount; // Müşterinin ödeyeceği toplam tutar.
-
-        const transactionInsertQuery = `
-            INSERT INTO transactions (ticket_id, organizer_id, gross_amount, commission_rate, commission_amount, net_amount)
-            VALUES ($1, $2, $3, $4, $5, $6);
-        `;
+        const net_amount = parseFloat(price);
+        const commission_amount = net_amount * commission_rate;
+        const gross_amount = net_amount + commission_amount;
+        const transactionInsertQuery = `INSERT INTO transactions (ticket_id, organizer_id, gross_amount, commission_rate, commission_amount, net_amount) VALUES ($1, $2, $3, $4, $5, $6);`;
         const transactionValues = [ticket_id, organizer_id, gross_amount, commission_rate, commission_amount, net_amount];
         await client.query(transactionInsertQuery, transactionValues);
         await client.query('COMMIT');
