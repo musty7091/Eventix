@@ -48,7 +48,7 @@ const isAdmin = (req, res, next) => {
     next();
 };
 
-// YENİ: Kullanıcının rolünün 'business' olup olmadığını kontrol eden middleware
+// Kullanıcının rolünün 'business' olup olmadığını kontrol eden middleware
 const isBusiness = (req, res, next) => {
     if (req.user.role !== 'business') {
         return res.status(403).json({ message: 'Erişim reddedildi: Bu işlem için işletme yetkisi gerekir.' });
@@ -118,7 +118,7 @@ app.get('/api/profile', verifyToken, (req, res) => {
     res.json({ message: 'Profil bilgileri başarıyla alındı.', user: req.user });
 });
 
-// ADMIN'E ÖZEL YOL (Tüm kullanıcıları listeler)
+// --- ADMIN'E ÖZEL YOLLAR ---
 app.get('/api/admin/users', [verifyToken, isAdmin], async (req, res) => {
     try {
         const result = await db.query("SELECT id, email, role, created_at FROM users ORDER BY created_at DESC");
@@ -129,9 +129,50 @@ app.get('/api/admin/users', [verifyToken, isAdmin], async (req, res) => {
     }
 });
 
-// YENİ: İŞLETMEYE ÖZEL YOL (Basit bir karşılama mesajı)
+// --- İŞLETMEYE ÖZEL YOLLAR ---
 app.get('/api/business/dashboard', [verifyToken, isBusiness], (req, res) => {
     res.json({ message: `Hoş geldin, İşletme Sahibi: ${req.user.email}`});
+});
+
+// YENİ: ETKİNLİK OLUŞTURMA YOLU
+app.post('/api/events', [verifyToken, isBusiness], async (req, res) => {
+    const pool = db.getPool();
+    const client = await pool.connect();
+
+    try {
+        const { name, description, event_date, location, category, ticket_types } = req.body;
+        const organizer_id = req.user.id; 
+        
+        await client.query('BEGIN');
+
+        const eventInsertQuery = `
+            INSERT INTO events (name, description, event_date, location, category, organizer_id)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id;
+        `;
+        const eventValues = [name, description, event_date, location, category, organizer_id];
+        const newEvent = await client.query(eventInsertQuery, eventValues);
+        const eventId = newEvent.rows[0].id;
+
+        for (const type of ticket_types) {
+            const ticketTypeInsertQuery = `
+                INSERT INTO ticket_types (name, price, capacity, event_id)
+                VALUES ($1, $2, $3, $4);
+            `;
+            const ticketTypeValues = [type.name, type.price, type.capacity, eventId];
+            await client.query(ticketTypeInsertQuery, ticketTypeValues);
+        }
+
+        await client.query('COMMIT');
+        res.status(201).json({ message: 'Etkinlik ve bilet türleri başarıyla oluşturuldu.', eventId: eventId });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Etkinlik oluşturma sırasında hata:', error);
+        res.status(500).json({ message: 'Sunucuda bir hata oluştu.' });
+    } finally {
+        client.release();
+    }
 });
 
 
