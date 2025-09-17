@@ -65,13 +65,52 @@ const isEndUser = (req, res, next) => {
 
 app.post('/api/register', async (req, res) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ message: 'E-posta ve şifre alanları zorunludur.' });
+    const { email, password, first_name, last_name, phone_number, date_of_birth } = req.body;
+
+    if (!email || !password || !first_name || !last_name || !phone_number || !date_of_birth) {
+      return res.status(400).json({ message: 'Lütfen tüm zorunlu alanları doldurun.' });
+    }
+    
+    // YENİ: Telefon numarası format kontrolü (Regular Expression ile)
+    const phoneRegex = /^\+90\d{10}$/; // +90 ile başlar, ardından 10 rakam gelir
+    if (!phoneRegex.test(phone_number)) {
+        return res.status(400).json({ message: 'Telefon numarası formatı geçersiz. Örnek: +905331234567' });
+    }
+
+    // YENİ: Şifre karmaşıklığı kontrolü
+    if (password.length < 8) {
+        return res.status(400).json({ message: 'Şifre en az 8 karakter olmalıdır.' });
+    }
+    if (!/[A-Z]/.test(password)) {
+        return res.status(400).json({ message: 'Şifre en az bir büyük harf içermelidir.' });
+    }
+    if (!/[a-z]/.test(password)) {
+        return res.status(400).json({ message: 'Şifre en az bir küçük harf içermelidir.' });
+    }
+    if (!/[0-9]/.test(password)) {
+        return res.status(400).json({ message: 'Şifre en az bir rakam içermelidir.' });
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
-    const newUser = await db.query("INSERT INTO users (email, password) VALUES ($1, $2) RETURNING id, email, created_at, role", [email, hashedPassword]);
-    res.status(201).json({ message: 'Kullanıcı başarıyla oluşturuldu.', user: newUser.rows[0]});
+    
+    const newUserQuery = `
+        INSERT INTO users (email, password, first_name, last_name, phone_number, date_of_birth) 
+        VALUES ($1, $2, $3, $4, $5, $6) 
+        RETURNING id, email, first_name, last_name, role, created_at
+    `;
+    const values = [email, hashedPassword, first_name, last_name, phone_number, date_of_birth];
+    
+    const newUser = await db.query(newUserQuery, values);
+    
+    res.status(201).json({ 
+      message: 'Kullanıcı başarıyla oluşturuldu.',
+      user: newUser.rows[0]
+    });
+
   } catch (error) {
-    if (error.code === '23505') return res.status(409).json({ message: 'Bu e-posta adresi zaten kullanılıyor.' });
+    if (error.code === '23505') {
+      return res.status(409).json({ message: 'Bu e-posta adresi zaten kullanılıyor.' });
+    }
     console.error('Kayıt sırasında hata:', error);
     res.status(500).json({ message: 'Sunucuda bir hata oluştu.' });
   }
